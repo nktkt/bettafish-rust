@@ -1,0 +1,22 @@
+[package]
+name = "bettafish-app"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "bettafish"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+bettafish-config = { path = "../config" }
+bettafish-query-engine = { path = "../query-engine" }
+bettafish-insight-engine = { path = "../insight-engine" }
+bettafish-media-engine = { path = "../media-engine" }
+bettafish-forum-engine = { path = "../forum-engine" }
+bettafish-report-engine = { path = "../report-engine" }
+bettafish-mindspider = { path = "../mindspider" }

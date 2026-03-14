@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/config",
+    "crates/common",
+    "crates/llm",
+    "crates/query-engine",
+    "crates/insight-engine",
+    "crates/media-engine",
+    "crates/forum-engine",
+    "crates/report-engine",
+    "crates/mindspider",
+    "crates/app",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+authors = ["BettaFish Rust Port"]
+license = "GPL-3.0"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+regex = "1"
+thiserror = "2"
+anyhow = "1"
+futures = "0.3"
+async-trait = "0.1"

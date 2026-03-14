@@ -1,0 +1,9 @@
+[package]
+name = "bettafish-forum-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
