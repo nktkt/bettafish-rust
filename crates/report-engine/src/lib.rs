@@ -1947,3 +1947,192 @@ pub trait ReportEngineTrait: Send + Sync {
     async fn get_status(&self, task_id: &str) -> Result<Value>;
     async fn download(&self, task_id: &str, format: &str) -> Result<Vec<u8>>;
 }
+
+// =============================================================================
+// テスト
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ir_validator_valid_chapter() {
+        let validator = IRValidator::new();
+        let chapter = serde_json::json!({
+            "chapterId": "ch1",
+            "title": "Chapter 1",
+            "anchor": "chapter-1",
+            "order": 1,
+            "blocks": [
+                {
+                    "type": "heading",
+                    "level": 2,
+                    "text": "Test heading"
+                },
+                {
+                    "type": "paragraph",
+                    "inlines": [{"text": "Some content"}]
+                }
+            ]
+        });
+        let (is_valid, errors) = validator.validate_chapter(&chapter);
+        // With the proper fields present it should be valid
+        assert!(is_valid, "Expected valid chapter, errors: {:?}", errors);
+    }
+
+    #[test]
+    fn test_ir_validator_missing_fields() {
+        let validator = IRValidator::new();
+        let chapter = serde_json::json!({
+            "title": "Only title"
+        });
+        let (is_valid, errors) = validator.validate_chapter(&chapter);
+        assert!(!is_valid);
+        assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn test_ir_validator_empty_blocks() {
+        let validator = IRValidator::new();
+        let chapter = serde_json::json!({
+            "chapterId": "ch1",
+            "title": "Chapter 1",
+            "anchor": "chapter-1",
+            "order": 1,
+            "blocks": []
+        });
+        let (is_valid, errors) = validator.validate_chapter(&chapter);
+        assert!(!is_valid);
+        assert!(errors.iter().any(|e| e.contains("空")));
+    }
+
+    #[test]
+    fn test_template_parser() {
+        let template = "# Main Title\n\n## Section A\nContent A\n\n## Section B\nContent B";
+        let sections = parse_template_sections(template);
+        assert!(sections.len() >= 2, "Expected at least 2 sections, got {}", sections.len());
+    }
+
+    #[test]
+    fn test_template_parser_empty() {
+        let sections = parse_template_sections("");
+        // Empty template should return empty or minimal sections
+        assert!(sections.is_empty() || sections.len() == 1);
+    }
+
+    #[test]
+    fn test_markdown_renderer() {
+        let renderer = MarkdownRenderer::new();
+        let doc = serde_json::json!({
+            "title": "Test Report",
+            "meta": {"generatedAt": "2025-01-01"},
+            "chapters": [
+                {
+                    "chapterId": "ch1",
+                    "title": "Chapter One",
+                    "anchor": "ch1",
+                    "order": 1,
+                    "blocks": [
+                        {
+                            "type": "heading",
+                            "level": 2,
+                            "runs": [{"text": "Heading"}]
+                        },
+                        {
+                            "type": "paragraph",
+                            "runs": [{"text": "Some text here."}]
+                        }
+                    ]
+                }
+            ]
+        });
+        let md = renderer.render(&doc);
+        assert!(!md.is_empty());
+    }
+
+    #[test]
+    fn test_html_renderer() {
+        let renderer = HTMLRenderer::new();
+        let doc = serde_json::json!({
+            "title": "Test",
+            "chapters": []
+        });
+        let html = renderer.render(&doc);
+        assert!(!html.is_empty());
+    }
+
+    #[test]
+    fn test_report_state_lifecycle() {
+        let mut state = ReportState::default();
+        assert_eq!(state.status, "pending");
+        assert!(!state.is_completed());
+
+        state.mark_processing();
+        assert_eq!(state.status, "processing");
+
+        state.mark_completed();
+        assert!(state.is_completed());
+
+        let json = state.to_json().unwrap();
+        assert!(json.contains("completed"));
+    }
+
+    #[test]
+    fn test_report_state_failure() {
+        let mut state = ReportState::default();
+        state.mark_failed("Something went wrong");
+        assert_eq!(state.status, "failed");
+        assert_eq!(state.error_message.as_deref(), Some("Something went wrong"));
+    }
+
+    #[test]
+    fn test_document_composer() {
+        let mut composer = DocumentComposer::new();
+        let chapters = vec![
+            serde_json::json!({
+                "chapterId": "ch1",
+                "title": "Chapter 1",
+                "anchor": "chapter-1",
+                "order": 1,
+                "blocks": []
+            })
+        ];
+        let metadata = serde_json::json!({"query": "test"});
+        let doc = composer.build_document("report_1", &metadata, &chapters);
+        assert!(doc.get("chapters").is_some());
+        assert!(doc.get("reportId").is_some());
+    }
+
+    #[test]
+    fn test_robust_json_parser() {
+        let parser = RobustJSONParser::new(true, 3);
+        let valid_json = r#"{"key": "value"}"#;
+        let result = parser.parse(valid_json, "test", None);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap()["key"], "value");
+    }
+
+    #[test]
+    fn test_robust_json_parser_repair() {
+        let parser = RobustJSONParser::new(true, 3);
+        let broken_json = r#"{"key": "value",}"#;
+        let result = parser.parse(broken_json, "test", None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_allowed_block_types() {
+        assert_eq!(ALLOWED_BLOCK_TYPES.len(), 16);
+        assert!(ALLOWED_BLOCK_TYPES.contains(&"heading"));
+        assert!(ALLOWED_BLOCK_TYPES.contains(&"paragraph"));
+        assert!(ALLOWED_BLOCK_TYPES.contains(&"table"));
+    }
+
+    #[test]
+    fn test_allowed_inline_marks() {
+        assert_eq!(ALLOWED_INLINE_MARKS.len(), 12);
+        assert!(ALLOWED_INLINE_MARKS.contains(&"bold"));
+        assert!(ALLOWED_INLINE_MARKS.contains(&"italic"));
+    }
+}

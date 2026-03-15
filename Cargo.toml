@@ -10,6 +10,7 @@ members = [
     "crates/forum-engine",
     "crates/report-engine",
     "crates/mindspider",
+    "crates/sentiment-analysis",
     "crates/app",
 ]
 

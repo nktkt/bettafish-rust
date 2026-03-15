@@ -14,6 +14,12 @@ use bettafish_config::Settings;
 use bettafish_mindspider::{MindSpider, SUPPORTED_PLATFORMS};
 use bettafish_query_engine::DeepSearchAgent;
 
+mod server;
+mod single_engine;
+
+#[cfg(test)]
+mod tests;
+
 /// バージョン情報
 const VERSION: &str = "1.0.0";
 
@@ -32,6 +38,20 @@ enum Command {
     Status,
     /// ヘルプを表示
     Help,
+    /// HTTP サーバーを起動
+    Server,
+    /// InsightEngine でクエリを実行
+    Insight(String),
+    /// MediaEngine でクエリを実行
+    Media(String),
+    /// PDF エクスポート
+    ExportPdf(ExportArgs),
+    /// HTML 再生成
+    RegenerateHtml(ExportArgs),
+    /// Markdown 再生成
+    RegenerateMd(ExportArgs),
+    /// レポートのみ生成
+    ReportOnly(ReportOnlyArgs),
 }
 
 /// パイプライン引数
@@ -55,6 +75,24 @@ struct MindSpiderArgs {
     test_mode: bool,
 }
 
+/// エクスポート引数
+#[derive(Debug)]
+struct ExportArgs {
+    /// 入力ファイルパス
+    input_path: String,
+    /// 出力ファイルパス (任意)
+    output_path: Option<String>,
+}
+
+/// レポートのみ生成引数
+#[derive(Debug)]
+struct ReportOnlyArgs {
+    /// レポートソースディレクトリ
+    source_dir: String,
+    /// 出力ディレクトリ
+    output_dir: Option<String>,
+}
+
 /// コマンドライン引数を解析
 fn parse_args() -> Command {
     let args: Vec<String> = std::env::args().collect();
@@ -72,6 +110,9 @@ fn parse_args() -> Command {
         "--config" | "config" => Command::ShowConfig,
         "--status" | "status" => Command::Status,
 
+        // HTTP サーバーモード
+        "server" | "serve" => Command::Server,
+
         // QueryEngine モード
         "query" | "--query" => {
             let query = if args.len() > 2 {
@@ -80,6 +121,98 @@ fn parse_args() -> Command {
                 "人工智能最新发展趋势分析".to_string()
             };
             Command::Query(query)
+        }
+
+        // InsightEngine モード
+        "insight" => {
+            let query = if args.len() > 2 {
+                args[2..].join(" ")
+            } else {
+                "人工智能最新发展趋势分析".to_string()
+            };
+            Command::Insight(query)
+        }
+
+        // MediaEngine モード
+        "media" => {
+            let query = if args.len() > 2 {
+                args[2..].join(" ")
+            } else {
+                "人工智能最新发展趋势分析".to_string()
+            };
+            Command::Media(query)
+        }
+
+        // PDF エクスポート
+        "export-pdf" => {
+            let input_path = if args.len() > 2 {
+                args[2].clone()
+            } else {
+                "reports".to_string()
+            };
+            let output_path = if args.len() > 3 {
+                Some(args[3].clone())
+            } else {
+                None
+            };
+            Command::ExportPdf(ExportArgs {
+                input_path,
+                output_path,
+            })
+        }
+
+        // HTML 再生成
+        "regenerate-html" => {
+            let input_path = if args.len() > 2 {
+                args[2].clone()
+            } else {
+                "reports".to_string()
+            };
+            let output_path = if args.len() > 3 {
+                Some(args[3].clone())
+            } else {
+                None
+            };
+            Command::RegenerateHtml(ExportArgs {
+                input_path,
+                output_path,
+            })
+        }
+
+        // Markdown 再生成
+        "regenerate-md" => {
+            let input_path = if args.len() > 2 {
+                args[2].clone()
+            } else {
+                "reports".to_string()
+            };
+            let output_path = if args.len() > 3 {
+                Some(args[3].clone())
+            } else {
+                None
+            };
+            Command::RegenerateMd(ExportArgs {
+                input_path,
+                output_path,
+            })
+        }
+
+        // レポートのみ生成
+        "report-only" => {
+            let source_dir = if args.len() > 2 {
+                args[2].clone()
+            } else {
+                "reports".to_string()
+            };
+            let output_dir = if args.len() > 3 {
+                Some(args[3].clone())
+            } else {
+                None
+            };
+            Command::ReportOnly(ReportOnlyArgs {
+                source_dir,
+                output_dir,
+            })
         }
 
         // MindSpider モード
@@ -188,15 +321,31 @@ BettaFish Rust v{} - 世論分析プラットフォーム
 
 コマンド:
   query <テキスト>         QueryEngine でクエリを実行 (デフォルト)
+  insight <テキスト>       InsightEngine でクエリを実行 (ローカルDB)
+  media <テキスト>         MediaEngine でクエリを実行 (マルチモーダル)
   mindspider <サブコマンド>  MindSpider クローラーを実行
   pipeline <テキスト>      完全パイプラインを実行
+  server                   HTTP サーバーを起動
   config                   設定情報を表示
   status                   プロジェクトステータスを表示
+  export-pdf <入力> [出力]  PDF エクスポート
+  regenerate-html <入力>   HTML を再生成
+  regenerate-md <入力>     Markdown を再生成
+  report-only <ソース>     レポートのみ生成
   help                     このヘルプを表示
 
 QueryEngine:
   bettafish query "人工知能の最新動向"
   bettafish "テーマを直接入力"
+
+InsightEngine:
+  bettafish insight "半導体業界の世論分析"
+
+MediaEngine:
+  bettafish media "AI 画像生成の動向"
+
+HTTP サーバー:
+  bettafish server
 
 MindSpider サブコマンド:
   broad-topic              トピック抽出を実行
@@ -214,16 +363,27 @@ MindSpider オプション:
   --max-notes N            最大ノート数 (デフォルト: 50)
   --test                   テストモード (少量データ)
 
+レポート操作:
+  bettafish export-pdf reports/report.json output.pdf
+  bettafish regenerate-html reports/report.json
+  bettafish regenerate-md reports/report.json
+  bettafish report-only reports/
+
 サポートプラットフォーム:
   xhs (小紅書), dy (抖音), ks (快手), bili (B站),
   wb (微博), tieba (貼吧), zhihu (知乎)
 
 例:
   bettafish query "AI最新トレンド"
+  bettafish insight "半導体業界の世論"
+  bettafish media "AI画像生成の動向"
+  bettafish server
   bettafish mindspider broad-topic --keywords-count 50
   bettafish mindspider deep-sentiment --platforms xhs dy --test
   bettafish mindspider complete --date 2025-01-15
   bettafish pipeline "半導体業界の動向分析"
+  bettafish export-pdf reports/latest.json
+  bettafish report-only reports/
 "#,
         VERSION
     );
@@ -535,6 +695,185 @@ async fn run_pipeline(settings: Settings, args: PipelineArgs) -> Result<()> {
     Ok(())
 }
 
+/// HTTP サーバーを起動
+async fn run_server(settings: Settings) -> Result<()> {
+    let app_server = server::AppServer::new(settings);
+    app_server.start().await
+}
+
+/// PDF エクスポートを実行
+async fn run_export_pdf(_settings: Settings, args: ExportArgs) -> Result<()> {
+    info!("{}", "=".repeat(60));
+    info!("PDF エクスポート");
+    info!("入力: {}", args.input_path);
+    info!("{}", "=".repeat(60));
+
+    let output_path = args.output_path.unwrap_or_else(|| {
+        let stem = std::path::Path::new(&args.input_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("report");
+        format!("{}.pdf", stem)
+    });
+
+    // ReportEngine の PDFRenderer を使用
+    let pdf_renderer = bettafish_report_engine::PDFRenderer::new();
+    info!("PDF レンダラーを初期化しました");
+
+    // 入力ファイルを読み取り
+    match std::fs::read_to_string(&args.input_path) {
+        Ok(content) => {
+            match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(document_ir) => {
+                    match pdf_renderer.render_to_html(&document_ir, &output_path) {
+                        Ok(()) => {
+                            info!("PDF エクスポート完了: {}", output_path);
+                        }
+                        Err(e) => {
+                            error!("PDF レンダリング失敗: {}", e);
+                            error!("注意: PDF レンダリングには wkhtmltopdf が必要です");
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("JSON 解析失敗: {}", e);
+                    error!("入力ファイルが有効な IR JSON である必要があります");
+                }
+            }
+        }
+        Err(e) => {
+            error!("ファイル読み取り失敗: {} - {}", args.input_path, e);
+        }
+    }
+
+    Ok(())
+}
+
+/// HTML 再生成を実行
+async fn run_regenerate_html(_settings: Settings, args: ExportArgs) -> Result<()> {
+    info!("{}", "=".repeat(60));
+    info!("HTML 再生成");
+    info!("入力: {}", args.input_path);
+    info!("{}", "=".repeat(60));
+
+    let output_path = args.output_path.unwrap_or_else(|| {
+        let stem = std::path::Path::new(&args.input_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("report");
+        format!("{}.html", stem)
+    });
+
+    match std::fs::read_to_string(&args.input_path) {
+        Ok(content) => {
+            match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(document_ir) => {
+                    let renderer = bettafish_report_engine::HTMLRenderer::new();
+                    let html = renderer.render(&document_ir);
+                    match std::fs::write(&output_path, &html) {
+                        Ok(()) => {
+                            info!("HTML 再生成完了: {} ({} 文字)", output_path, html.len());
+                        }
+                        Err(e) => {
+                            error!("ファイル書き込み失敗: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("JSON 解析失敗: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            error!("ファイル読み取り失敗: {} - {}", args.input_path, e);
+        }
+    }
+
+    Ok(())
+}
+
+/// Markdown 再生成を実行
+async fn run_regenerate_md(_settings: Settings, args: ExportArgs) -> Result<()> {
+    info!("{}", "=".repeat(60));
+    info!("Markdown 再生成");
+    info!("入力: {}", args.input_path);
+    info!("{}", "=".repeat(60));
+
+    let output_path = args.output_path.unwrap_or_else(|| {
+        let stem = std::path::Path::new(&args.input_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("report");
+        format!("{}.md", stem)
+    });
+
+    match std::fs::read_to_string(&args.input_path) {
+        Ok(content) => {
+            match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(document_ir) => {
+                    let md_renderer = bettafish_report_engine::MarkdownRenderer::new();
+                    let markdown = md_renderer.render(&document_ir);
+                    match std::fs::write(&output_path, &markdown) {
+                        Ok(()) => {
+                            info!("Markdown 再生成完了: {} ({} 文字)", output_path, markdown.len());
+                        }
+                        Err(e) => {
+                            error!("ファイル書き込み失敗: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("JSON 解析失敗: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            error!("ファイル読み取り失敗: {} - {}", args.input_path, e);
+        }
+    }
+
+    Ok(())
+}
+
+/// レポートのみ生成を実行
+async fn run_report_only(settings: Settings, args: ReportOnlyArgs) -> Result<()> {
+    info!("{}", "=".repeat(60));
+    info!("レポートのみ生成モード");
+    info!("ソース: {}", args.source_dir);
+    info!("{}", "=".repeat(60));
+
+    let output_dir = args.output_dir.unwrap_or_else(|| settings.output_dir.clone());
+
+    match bettafish_report_engine::ReportAgent::new(Some(settings)) {
+        Ok(_agent) => {
+            info!("ReportAgent を初期化しました");
+            info!("ソースディレクトリ: {}", args.source_dir);
+            info!("出力ディレクトリ: {}", output_dir);
+
+            // ソースディレクトリから JSON ファイルを検索
+            let source_path = std::path::Path::new(&args.source_dir);
+            if !source_path.exists() {
+                error!("ソースディレクトリが存在しません: {}", args.source_dir);
+                std::process::exit(1);
+            }
+
+            info!("ReportAgent によるレポート生成を開始します");
+            info!("注意: 完全な実装にはソースデータの読み込みと統合が必要です");
+            info!("現在はスタブ実装として出力ディレクトリの確認のみ行います");
+
+            std::fs::create_dir_all(&output_dir)?;
+            info!("出力ディレクトリを確認/作成しました: {}", output_dir);
+        }
+        Err(e) => {
+            error!("ReportAgent 初期化失敗: {}", e);
+            error!("ヒント: .env に REPORT_ENGINE_API_KEY を設定してください");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // ログ初期化
@@ -571,11 +910,34 @@ async fn main() -> Result<()> {
             info!("{}", settings.display_query_engine_config());
             run_query_engine(settings, &query).await?;
         }
+        Command::Insight(query) => {
+            info!("InsightEngine モード");
+            single_engine::run_insight_engine(&query, settings).await?;
+        }
+        Command::Media(query) => {
+            info!("MediaEngine モード");
+            single_engine::run_media_engine(&query, settings).await?;
+        }
         Command::MindSpiderCmd(args) => {
             run_mindspider(settings, args).await?;
         }
         Command::Pipeline(args) => {
             run_pipeline(settings, args).await?;
+        }
+        Command::Server => {
+            run_server(settings).await?;
+        }
+        Command::ExportPdf(args) => {
+            run_export_pdf(settings, args).await?;
+        }
+        Command::RegenerateHtml(args) => {
+            run_regenerate_html(settings, args).await?;
+        }
+        Command::RegenerateMd(args) => {
+            run_regenerate_md(settings, args).await?;
+        }
+        Command::ReportOnly(args) => {
+            run_report_only(settings, args).await?;
         }
     }
 

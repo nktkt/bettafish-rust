@@ -282,3 +282,146 @@ impl State {
         Ok(state)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_state_default() {
+        let state = State::default();
+        assert!(state.query.is_empty());
+        assert!(state.paragraphs.is_empty());
+        assert!(!state.is_completed);
+    }
+
+    #[test]
+    fn test_state_add_paragraph() {
+        let mut state = State::default();
+        let idx = state.add_paragraph("タイトル1", "内容1");
+        assert_eq!(idx, 0);
+        assert_eq!(state.paragraphs.len(), 1);
+        assert_eq!(state.paragraphs[0].title, "タイトル1");
+        assert_eq!(state.paragraphs[0].content, "内容1");
+        assert_eq!(state.paragraphs[0].order, 0);
+
+        let idx2 = state.add_paragraph("タイトル2", "内容2");
+        assert_eq!(idx2, 1);
+        assert_eq!(state.paragraphs.len(), 2);
+    }
+
+    #[test]
+    fn test_state_get_paragraph() {
+        let mut state = State::default();
+        state.add_paragraph("p1", "c1");
+        state.add_paragraph("p2", "c2");
+
+        let p = state.get_paragraph(0);
+        assert!(p.is_some());
+        assert_eq!(p.unwrap().title, "p1");
+
+        let p2 = state.get_paragraph(5);
+        assert!(p2.is_none());
+    }
+
+    #[test]
+    fn test_state_completion() {
+        let mut state = State::default();
+        state.add_paragraph("p1", "c1");
+        state.add_paragraph("p2", "c2");
+
+        assert!(!state.is_all_paragraphs_completed());
+        assert_eq!(state.get_completed_paragraphs_count(), 0);
+
+        state.paragraphs[0].research.latest_summary = "summary".to_string();
+        state.paragraphs[0].research.mark_completed();
+        assert_eq!(state.get_completed_paragraphs_count(), 1);
+        assert!(!state.is_all_paragraphs_completed());
+
+        state.paragraphs[1].research.latest_summary = "summary2".to_string();
+        state.paragraphs[1].research.mark_completed();
+        assert!(state.is_all_paragraphs_completed());
+    }
+
+    #[test]
+    fn test_state_serialization() {
+        let mut state = State::default();
+        state.query = "test query".to_string();
+        state.add_paragraph("p1", "c1");
+
+        let json = state.to_json().unwrap();
+        assert!(json.contains("test query"));
+        assert!(json.contains("p1"));
+
+        let restored = State::from_json(&json).unwrap();
+        assert_eq!(restored.query, "test query");
+        assert_eq!(restored.paragraphs.len(), 1);
+    }
+
+    #[test]
+    fn test_state_progress_summary() {
+        let mut state = State::default();
+        state.add_paragraph("p1", "c1");
+        state.add_paragraph("p2", "c2");
+
+        let summary = state.get_progress_summary();
+        assert_eq!(summary["total_paragraphs"], 2);
+        assert_eq!(summary["completed_paragraphs"], 0);
+    }
+
+    #[test]
+    fn test_research_add_search() {
+        let mut research = Research::default();
+        assert_eq!(research.get_search_count(), 0);
+
+        research.add_search(Search::default());
+        assert_eq!(research.get_search_count(), 1);
+    }
+
+    #[test]
+    fn test_research_add_search_results() {
+        let mut research = Research::default();
+        let results = vec![
+            serde_json::json!({
+                "url": "https://example.com",
+                "title": "Test",
+                "content": "Content",
+                "score": 0.95
+            })
+        ];
+        research.add_search_results("query", &results);
+        assert_eq!(research.get_search_count(), 1);
+        assert_eq!(research.search_history[0].query, "query");
+        assert_eq!(research.search_history[0].url, "https://example.com");
+    }
+
+    #[test]
+    fn test_research_reflection() {
+        let mut research = Research::default();
+        assert_eq!(research.reflection_iteration, 0);
+        research.increment_reflection();
+        assert_eq!(research.reflection_iteration, 1);
+    }
+
+    #[test]
+    fn test_paragraph_completion() {
+        let mut para = Paragraph::default();
+        assert!(!para.is_completed());
+
+        para.research.mark_completed();
+        assert!(!para.is_completed()); // needs summary too
+
+        para.research.latest_summary = "summary".to_string();
+        assert!(para.is_completed());
+    }
+
+    #[test]
+    fn test_paragraph_get_final_content() {
+        let mut para = Paragraph::default();
+        para.content = "original content".to_string();
+        assert_eq!(para.get_final_content(), "original content");
+
+        para.research.latest_summary = "updated summary".to_string();
+        assert_eq!(para.get_final_content(), "updated summary");
+    }
+}

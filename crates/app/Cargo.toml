@@ -12,8 +12,10 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+async-trait = { workspace = true }
 bettafish-config = { path = "../config" }
 bettafish-common = { path = "../common" }
 bettafish-llm = { path = "../llm" }
@@ -23,3 +25,4 @@ bettafish-media-engine = { path = "../media-engine" }
 bettafish-forum-engine = { path = "../forum-engine" }
 bettafish-report-engine = { path = "../report-engine" }
 bettafish-mindspider = { path = "../mindspider" }
+bettafish-sentiment-analysis = { path = "../sentiment-analysis" }
