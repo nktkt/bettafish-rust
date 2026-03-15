@@ -13,7 +13,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
+chrono = { workspace = true }
 bettafish-config = { path = "../config" }
+bettafish-common = { path = "../common" }
+bettafish-llm = { path = "../llm" }
 bettafish-query-engine = { path = "../query-engine" }
 bettafish-insight-engine = { path = "../insight-engine" }
 bettafish-media-engine = { path = "../media-engine" }

@@ -1,41 +1,38 @@
-//! BettaFish InsightEngine (スタブ)
+//! BettaFish InsightEngine
 //!
-//! ローカルデータベースの世論データを分析する InsightEngine のインターフェース定義。
-//! 完全実装は今後のフェーズで行う。
+//! Python の InsightEngine の Rust 実装。
+//! ローカルデータベースの世論データを分析する深度検索 AI エージェント。
+//! QueryEngine との違い:
+//! - MediaCrawlerDB (DB クエリ) を使用 (Tavily の代わり)
+//! - KeywordOptimizer (クエリをインターネットスラングに変換)
+//! - SentimentAnalyzer (22言語5段階の感情分析)
+//! - KMeans クラスタリングによる結果サンプリング
+//! - 5つの DB 検索ツール
 
-use async_trait::async_trait;
+// =============================================================================
+// モジュール構成
+// =============================================================================
 
-/// InsightEngine トレイト
-///
-/// InsightEngine はローカル DB の SNS データを使用して分析を行う。
-/// ツール: MediaCrawlerDB (5種), KeywordOptimizer, SentimentAnalyzer
-#[async_trait]
-pub trait InsightEngine: Send + Sync {
-    /// 深度研究を実行
-    async fn research(&mut self, query: &str) -> anyhow::Result<String>;
+pub mod state;
+pub mod prompts;
+pub mod tools;
+pub mod nodes;
+mod agent;
 
-    /// 進捗サマリーを取得
-    fn get_progress_summary(&self) -> serde_json::Value;
-}
+pub use agent::DeepSearchAgent;
+pub use state::State;
+pub use tools::db::{MediaCrawlerDB, QueryResult, DBResponse};
+pub use tools::keyword_optimizer::{KeywordOptimizer, KeywordOptimizationResponse};
+pub use tools::sentiment::{
+    SentimentAnalyzer, SentimentResult, BatchSentimentResult, StubSentimentAnalyzer,
+};
 
-/// InsightEngine 設定
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct InsightEngineConfig {
-    pub api_key: String,
-    pub base_url: Option<String>,
-    pub model_name: String,
-    pub max_reflections: usize,
-    pub max_paragraphs: usize,
-}
+/// バージョン情報
+pub const VERSION: &str = "1.0.0";
 
-impl Default for InsightEngineConfig {
-    fn default() -> Self {
-        Self {
-            api_key: String::new(),
-            base_url: Some("https://api.moonshot.cn/v1".to_string()),
-            model_name: "kimi-k2-0711-preview".to_string(),
-            max_reflections: 3,
-            max_paragraphs: 6,
-        }
-    }
-}
+/// クラスタリング有効化フラグ
+pub const ENABLE_CLUSTERING: bool = true;
+/// クラスタリング後最大結果数
+pub const MAX_CLUSTERED_RESULTS: usize = 50;
+/// 各クラスタの返却結果数
+pub const RESULTS_PER_CLUSTER: usize = 5;

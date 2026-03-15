@@ -8,3 +8,12 @@ async-trait = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+bettafish-config = { path = "../config" }
+bettafish-common = { path = "../common" }
+bettafish-llm = { path = "../llm" }
