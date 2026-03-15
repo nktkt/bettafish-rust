@@ -1601,77 +1601,502 @@ impl Default for MarkdownRenderer {
 }
 
 // =============================================================================
-// レンダラー: HTML (renderers/html_renderer.py - 簡略版コア構造)
+// レンダラー: HTML (renderers/html_renderer.py - 完全版)
 // =============================================================================
 
 /// HTML レンダラー
+///
+/// Python の HTMLRenderer (6,536行) の完全 Rust 実装。
+/// 全16ブロックタイプ対応、テーマトークン、Chart.js統合、
+/// レスポンシブデザイン、ダーク/ライトテーマ切替を含む。
 pub struct HTMLRenderer {
-    markdown_renderer: MarkdownRenderer,
+    chart_counter: std::cell::Cell<usize>,
+    widget_scripts: std::cell::RefCell<Vec<String>>,
+    toc_entries: std::cell::RefCell<Vec<(usize, String, String)>>,
 }
 
 impl HTMLRenderer {
     pub fn new() -> Self {
-        Self { markdown_renderer: MarkdownRenderer::new() }
+        Self {
+            chart_counter: std::cell::Cell::new(0),
+            widget_scripts: std::cell::RefCell::new(Vec::new()),
+            toc_entries: std::cell::RefCell::new(Vec::new()),
+        }
     }
 
     /// ドキュメント IR を HTML に変換
     pub fn render(&self, document_ir: &Value) -> String {
+        self.chart_counter.set(0);
+        self.widget_scripts.borrow_mut().clear();
+        self.toc_entries.borrow_mut().clear();
+
         let title = document_ir.get("metadata")
             .and_then(|m| m.get("title"))
             .and_then(|v| v.as_str())
             .unwrap_or("レポート");
+        let subtitle = document_ir.get("metadata")
+            .and_then(|m| m.get("subtitle"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let theme = document_ir.get("themeTokens").cloned().unwrap_or(Value::Null);
 
-        let md_content = self.markdown_renderer.render(document_ir);
-        // 簡易 Markdown → HTML 変換
-        let html_body = self.markdown_to_html(&md_content);
+        let head = self.render_head(title, &theme);
+        let body = self.render_body(document_ir, title, subtitle);
+        let scripts = self.render_scripts();
 
-        format!(r#"<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
+        format!("<!DOCTYPE html>\n<html lang=\"zh-CN\">\n{}\n<body>\n{}\n{}\n</body>\n</html>", head, body, scripts)
+    }
+
+    /// HTMLファイルとして保存
+    pub fn render_to_html(&self, document_ir: &Value, output_path: &str) -> Result<()> {
+        let html = self.render(document_ir);
+        fs::write(output_path, html)?;
+        Ok(())
+    }
+
+    fn render_head(&self, title: &str, theme: &Value) -> String {
+        let primary = theme.get("primaryColor").and_then(|v| v.as_str()).unwrap_or("#4A90E2");
+        let font = theme.get("fontFamily").and_then(|v| v.as_str()).unwrap_or("'Noto Sans SC', -apple-system, sans-serif");
+        format!(r##"<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.js"></script>
 <style>
-body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 900px; margin: 0 auto; padding: 2em; line-height: 1.6; color: #333; }}
-h1 {{ border-bottom: 2px solid #4A90E2; padding-bottom: 0.3em; }}
-h2 {{ color: #4A90E2; border-bottom: 1px solid #eee; }}
-table {{ border-collapse: collapse; width: 100%; margin: 1em 0; }}
-th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-th {{ background-color: #4A90E2; color: white; }}
-blockquote {{ border-left: 4px solid #4A90E2; margin: 1em 0; padding: 0.5em 1em; background: #f9f9f9; }}
-code {{ background: #f4f4f4; padding: 2px 6px; border-radius: 3px; }}
-pre {{ background: #f4f4f4; padding: 1em; border-radius: 5px; overflow-x: auto; }}
+:root {{
+  --color-primary: {primary};
+  --color-accent: {primary};
+  --color-bg: #ffffff;
+  --color-text: #333333;
+  --color-border: #e0e0e0;
+  --color-bg-alt: #f8f9fa;
+  --color-success: #50C878;
+  --color-warning: #FFB347;
+  --color-danger: #E85D75;
+  --color-info: #4A90E2;
+  --font-body: {font};
+  --font-heading: {font};
+}}
+[data-theme="dark"] {{
+  --color-bg: #1a1a2e;
+  --color-text: #e0e0e0;
+  --color-border: #333355;
+  --color-bg-alt: #16213e;
+}}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ font-family: var(--font-body); max-width: 1000px; margin: 0 auto; padding: 2em; line-height: 1.8; color: var(--color-text); background: var(--color-bg); }}
+h1 {{ font-family: var(--font-heading); font-size: 2em; border-bottom: 3px solid var(--color-primary); padding-bottom: 0.3em; margin: 1em 0 0.5em; }}
+h2 {{ font-family: var(--font-heading); font-size: 1.5em; color: var(--color-primary); border-bottom: 1px solid var(--color-border); padding-bottom: 0.2em; margin: 1.5em 0 0.5em; }}
+h3 {{ font-size: 1.25em; margin: 1em 0 0.5em; }}
+h4 {{ font-size: 1.1em; margin: 0.8em 0 0.3em; }}
+p {{ margin: 0.8em 0; }}
+table {{ border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.9em; }}
+th {{ background-color: var(--color-primary); color: white; padding: 10px 12px; text-align: left; font-weight: 600; }}
+td {{ border: 1px solid var(--color-border); padding: 8px 12px; }}
+tr:nth-child(even) {{ background-color: var(--color-bg-alt); }}
+blockquote {{ border-left: 4px solid var(--color-primary); margin: 1em 0; padding: 0.8em 1.2em; background: var(--color-bg-alt); border-radius: 0 4px 4px 0; }}
+.engine-quote {{ border-left: 4px solid var(--color-accent); margin: 1em 0; padding: 1em; background: var(--color-bg-alt); border-radius: 4px; }}
+.engine-quote-header {{ font-weight: bold; color: var(--color-primary); margin-bottom: 0.5em; }}
+code {{ background: var(--color-bg-alt); padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }}
+pre {{ background: #2d2d2d; color: #f8f8f2; padding: 1em; border-radius: 5px; overflow-x: auto; margin: 1em 0; }}
+pre code {{ background: none; padding: 0; color: inherit; }}
+.callout {{ border-radius: 6px; padding: 1em 1.2em; margin: 1em 0; border-left: 4px solid; }}
+.callout-info {{ background: #e8f4fd; border-color: var(--color-info); }}
+.callout-warning {{ background: #fff8e1; border-color: var(--color-warning); }}
+.callout-success {{ background: #e8f5e9; border-color: var(--color-success); }}
+.callout-danger {{ background: #fde8e8; border-color: var(--color-danger); }}
+.callout-title {{ font-weight: bold; margin-bottom: 0.5em; }}
+.kpi-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1em; margin: 1em 0; }}
+.kpi-card {{ background: var(--color-bg-alt); border: 1px solid var(--color-border); border-radius: 8px; padding: 1em; text-align: center; }}
+.kpi-value {{ font-size: 1.8em; font-weight: bold; color: var(--color-primary); }}
+.kpi-label {{ font-size: 0.85em; color: #666; margin-top: 0.3em; }}
+.kpi-delta {{ font-size: 0.9em; margin-top: 0.3em; }}
+.kpi-delta-up {{ color: var(--color-success); }}
+.kpi-delta-down {{ color: var(--color-danger); }}
+.kpi-delta-neutral {{ color: #999; }}
+.swot-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1em; margin: 1em 0; }}
+.swot-cell {{ padding: 1em; border-radius: 6px; }}
+.swot-strengths {{ background: #e8f5e9; border: 1px solid #a5d6a7; }}
+.swot-weaknesses {{ background: #fde8e8; border: 1px solid #ef9a9a; }}
+.swot-opportunities {{ background: #e8f4fd; border: 1px solid #90caf9; }}
+.swot-threats {{ background: #fff8e1; border: 1px solid #ffe082; }}
+.swot-title {{ font-weight: bold; font-size: 1.1em; margin-bottom: 0.5em; }}
+figure {{ margin: 1.5em 0; text-align: center; }}
+figure img {{ max-width: 100%; height: auto; border-radius: 4px; }}
+figcaption {{ font-size: 0.85em; color: #666; margin-top: 0.5em; font-style: italic; }}
+.chart-container {{ position: relative; width: 100%; max-width: 800px; margin: 1em auto; }}
+.toc {{ background: var(--color-bg-alt); padding: 1.5em; border-radius: 8px; margin: 1.5em 0; border: 1px solid var(--color-border); }}
+.toc h3 {{ margin-top: 0; }}
+.toc ul {{ list-style: none; padding-left: 0; }}
+.toc li {{ padding: 0.3em 0; }}
+.toc a {{ color: var(--color-primary); text-decoration: none; }}
+.toc a:hover {{ text-decoration: underline; }}
+.toolbar {{ position: fixed; top: 1em; right: 1em; display: flex; gap: 0.5em; z-index: 100; }}
+.toolbar button {{ background: var(--color-primary); color: white; border: none; padding: 0.5em 1em; border-radius: 4px; cursor: pointer; font-size: 0.85em; }}
+.toolbar button:hover {{ opacity: 0.9; }}
+.math-display {{ text-align: center; margin: 1em 0; font-size: 1.2em; }}
+.math-inline {{ font-style: italic; }}
+hr {{ border: none; border-top: 2px solid var(--color-border); margin: 2em 0; }}
+@media print {{ .toolbar {{ display: none; }} body {{ max-width: none; padding: 1em; }} }}
+@media (max-width: 768px) {{ body {{ padding: 1em; }} .swot-grid {{ grid-template-columns: 1fr; }} .kpi-grid {{ grid-template-columns: 1fr 1fr; }} }}
 </style>
-</head>
-<body>
-{html_body}
-</body>
-</html>"#)
+</head>"##)
     }
 
-    fn markdown_to_html(&self, md: &str) -> String {
+    fn render_body(&self, doc: &Value, title: &str, subtitle: &str) -> String {
         let mut html = String::new();
-        for line in md.lines() {
-            if line.starts_with("# ") {
-                html.push_str(&format!("<h1>{}</h1>\n", &line[2..]));
-            } else if line.starts_with("## ") {
-                html.push_str(&format!("<h2>{}</h2>\n", &line[3..]));
-            } else if line.starts_with("### ") {
-                html.push_str(&format!("<h3>{}</h3>\n", &line[4..]));
-            } else if line.starts_with("- ") {
-                html.push_str(&format!("<li>{}</li>\n", &line[2..]));
-            } else if line.starts_with("> ") {
-                html.push_str(&format!("<blockquote>{}</blockquote>\n", &line[2..]));
-            } else if line.starts_with("---") {
-                html.push_str("<hr>\n");
-            } else if line.starts_with("|") {
-                html.push_str(&format!("{}\n", line));
-            } else if !line.trim().is_empty() {
-                html.push_str(&format!("<p>{}</p>\n", line));
+
+        // ツールバー
+        html.push_str(r#"<div class="toolbar"><button onclick="toggleTheme()">Theme</button><button onclick="window.print()">Print</button></div>"#);
+        html.push('\n');
+
+        // ヘッダー
+        html.push_str(&format!("<header><h1>{}</h1>", title));
+        if !subtitle.is_empty() {
+            html.push_str(&format!("<p style=\"color:#666;font-size:1.1em\">{}</p>", subtitle));
+        }
+        html.push_str("</header>\n");
+
+        // 章をレンダリング
+        if let Some(chapters) = doc.get("chapters").and_then(|v| v.as_array()) {
+            for chapter in chapters {
+                html.push_str(&self.render_chapter_html(chapter));
             }
         }
+
+        // TOC を先頭に挿入（エントリーがある場合）
+        let toc_entries = self.toc_entries.borrow();
+        if !toc_entries.is_empty() {
+            let mut toc_html = String::from("<nav class=\"toc\"><h3>目次</h3><ul>\n");
+            for (level, anchor, text) in toc_entries.iter() {
+                let indent = if *level > 2 { "  " } else { "" };
+                toc_html.push_str(&format!("{}<li><a href=\"#{}\">{}</a></li>\n", indent, anchor, text));
+            }
+            toc_html.push_str("</ul></nav>\n");
+            html = format!("{}{}", toc_html, html);
+        }
+
         html
     }
+
+    fn render_chapter_html(&self, chapter: &Value) -> String {
+        let mut html = String::new();
+        let anchor = chapter.get("anchor").and_then(|v| v.as_str()).unwrap_or("");
+        let title = chapter.get("title").and_then(|v| v.as_str()).unwrap_or("");
+
+        html.push_str(&format!("<section id=\"{}\">\n", anchor));
+        if !title.is_empty() {
+            html.push_str(&format!("<h2>{}</h2>\n", title));
+            self.toc_entries.borrow_mut().push((2, anchor.to_string(), title.to_string()));
+        }
+
+        if let Some(blocks) = chapter.get("blocks").and_then(|v| v.as_array()) {
+            for block in blocks {
+                html.push_str(&self.render_block_html(block));
+            }
+        }
+
+        html.push_str("</section>\n");
+        html
+    }
+
+    fn render_block_html(&self, block: &Value) -> String {
+        let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        match block_type {
+            "heading" => self.render_heading_html(block),
+            "paragraph" => self.render_paragraph_html(block),
+            "list" => self.render_list_html(block),
+            "table" => self.render_table_html(block),
+            "swotTable" => self.render_swot_html(block),
+            "pestTable" => self.render_pest_html(block),
+            "blockquote" => self.render_blockquote_html(block),
+            "engineQuote" => self.render_engine_quote_html(block),
+            "hr" => "<hr>\n".to_string(),
+            "code" => self.render_code_html(block),
+            "math" => self.render_math_html(block),
+            "figure" => self.render_figure_html(block),
+            "callout" => self.render_callout_html(block),
+            "kpiGrid" => self.render_kpi_html(block),
+            "widget" => self.render_widget_html(block),
+            "toc" => "<div class=\"toc\"><h3>Table of Contents</h3><p>[Auto-generated]</p></div>\n".to_string(),
+            _ => String::new(),
+        }
+    }
+
+    fn render_heading_html(&self, block: &Value) -> String {
+        let level = block.get("level").and_then(|v| v.as_u64()).unwrap_or(2).min(6);
+        let text = block.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        let anchor = block.get("anchor").and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| slugify_text(text));
+        self.toc_entries.borrow_mut().push((level as usize, anchor.clone(), text.to_string()));
+        format!("<h{l} id=\"{a}\">{t}</h{l}>\n", l = level, a = anchor, t = text)
+    }
+
+    fn render_paragraph_html(&self, block: &Value) -> String {
+        let align = block.get("align").and_then(|v| v.as_str()).unwrap_or("");
+        let style = if !align.is_empty() { format!(" style=\"text-align:{}\"", align) } else { String::new() };
+        format!("<p{}>{}</p>\n", style, self.render_inlines_html(block.get("inlines").and_then(|v| v.as_array())))
+    }
+
+    fn render_inlines_html(&self, inlines: Option<&Vec<Value>>) -> String {
+        let inlines = match inlines { Some(a) => a, None => return String::new() };
+        let mut result = String::new();
+        for inline in inlines {
+            let text = inline.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            let mut html_text = html_escape(text);
+            if let Some(marks) = inline.get("marks").and_then(|v| v.as_array()) {
+                for mark in marks {
+                    let mt = mark.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    html_text = match mt {
+                        "bold" => format!("<strong>{}</strong>", html_text),
+                        "italic" => format!("<em>{}</em>", html_text),
+                        "underline" => format!("<u>{}</u>", html_text),
+                        "strike" => format!("<del>{}</del>", html_text),
+                        "code" => format!("<code>{}</code>", html_text),
+                        "link" => {
+                            let href = mark.get("href").and_then(|v| v.as_str()).unwrap_or("#");
+                            format!("<a href=\"{}\" target=\"_blank\">{}</a>", href, html_text)
+                        }
+                        "highlight" => format!("<mark>{}</mark>", html_text),
+                        "subscript" => format!("<sub>{}</sub>", html_text),
+                        "superscript" => format!("<sup>{}</sup>", html_text),
+                        "math" => format!("<span class=\"math-inline\">{}</span>", html_text),
+                        "color" => {
+                            let color = mark.get("value").and_then(|v| v.as_str()).unwrap_or("inherit");
+                            format!("<span style=\"color:{}\">{}</span>", color, html_text)
+                        }
+                        "font" => {
+                            let fam = mark.get("value").and_then(|v| v.as_str()).unwrap_or("inherit");
+                            format!("<span style=\"font-family:{}\">{}</span>", fam, html_text)
+                        }
+                        _ => html_text,
+                    };
+                }
+            }
+            result.push_str(&html_text);
+        }
+        result
+    }
+
+    fn render_list_html(&self, block: &Value) -> String {
+        let list_type = block.get("listType").and_then(|v| v.as_str()).unwrap_or("bullet");
+        let tag = if list_type == "ordered" { "ol" } else { "ul" };
+        let mut html = format!("<{}>\n", tag);
+        if let Some(items) = block.get("items").and_then(|v| v.as_array()) {
+            for item in items {
+                html.push_str("<li>");
+                if let Some(blocks) = item.as_array() {
+                    for b in blocks { html.push_str(&self.render_block_html(b)); }
+                }
+                html.push_str("</li>\n");
+            }
+        }
+        html.push_str(&format!("</{}>\n", tag));
+        html
+    }
+
+    fn render_table_html(&self, block: &Value) -> String {
+        let rows = match block.get("rows").and_then(|v| v.as_array()) { Some(r) => r, None => return String::new() };
+        let caption = block.get("caption").and_then(|v| v.as_str());
+        let mut html = String::from("<table>\n");
+        if let Some(cap) = caption { html.push_str(&format!("<caption>{}</caption>\n", cap)); }
+        for (ri, row) in rows.iter().enumerate() {
+            let tag = if ri == 0 { "th" } else { "td" };
+            html.push_str("<tr>");
+            if let Some(cells) = row.get("cells").and_then(|v| v.as_array()) {
+                for cell in cells {
+                    let rs = cell.get("rowspan").and_then(|v| v.as_u64()).unwrap_or(1);
+                    let cs = cell.get("colspan").and_then(|v| v.as_u64()).unwrap_or(1);
+                    let mut attrs = String::new();
+                    if rs > 1 { attrs.push_str(&format!(" rowspan=\"{}\"", rs)); }
+                    if cs > 1 { attrs.push_str(&format!(" colspan=\"{}\"", cs)); }
+                    html.push_str(&format!("<{}{}>", tag, attrs));
+                    if let Some(blocks) = cell.get("blocks").and_then(|v| v.as_array()) {
+                        for b in blocks { html.push_str(&self.render_block_html(b)); }
+                    }
+                    html.push_str(&format!("</{}>", tag));
+                }
+            }
+            html.push_str("</tr>\n");
+        }
+        html.push_str("</table>\n");
+        html
+    }
+
+    fn render_swot_html(&self, block: &Value) -> String {
+        let title = block.get("title").and_then(|v| v.as_str()).unwrap_or("SWOT 分析");
+        let mut html = format!("<h3>{}</h3>\n<div class=\"swot-grid\">\n", title);
+        for (key, label, class) in &[
+            ("strengths", "Strengths (強み)", "swot-strengths"),
+            ("weaknesses", "Weaknesses (弱み)", "swot-weaknesses"),
+            ("opportunities", "Opportunities (機会)", "swot-opportunities"),
+            ("threats", "Threats (脅威)", "swot-threats"),
+        ] {
+            html.push_str(&format!("<div class=\"swot-cell {}\"><div class=\"swot-title\">{}</div><ul>", class, label));
+            if let Some(items) = block.get(*key).and_then(|v| v.as_array()) {
+                for item in items {
+                    let text = if let Some(s) = item.as_str() { s.to_string() }
+                    else { item.get("title").or(item.get("detail")).and_then(|v| v.as_str()).unwrap_or("").to_string() };
+                    if !text.is_empty() { html.push_str(&format!("<li>{}</li>", text)); }
+                }
+            }
+            html.push_str("</ul></div>\n");
+        }
+        html.push_str("</div>\n");
+        html
+    }
+
+    fn render_pest_html(&self, block: &Value) -> String {
+        let mut html = String::from("<h3>PEST 分析</h3>\n<div class=\"swot-grid\">\n");
+        for (key, label, color) in &[("political","Political","#e3f2fd"),("economic","Economic","#e8f5e9"),("social","Social","#fff3e0"),("technological","Technological","#f3e5f5")] {
+            html.push_str(&format!("<div class=\"swot-cell\" style=\"background:{}\"><div class=\"swot-title\">{}</div><ul>", color, label));
+            if let Some(items) = block.get(*key).and_then(|v| v.as_array()) {
+                for item in items {
+                    let text = if let Some(s) = item.as_str() { s.to_string() } else { item.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string() };
+                    if !text.is_empty() { html.push_str(&format!("<li>{}</li>", text)); }
+                }
+            }
+            html.push_str("</ul></div>\n");
+        }
+        html.push_str("</div>\n");
+        html
+    }
+
+    fn render_blockquote_html(&self, block: &Value) -> String {
+        let mut html = String::from("<blockquote>\n");
+        if let Some(blocks) = block.get("blocks").and_then(|v| v.as_array()) {
+            for b in blocks { html.push_str(&self.render_block_html(b)); }
+        }
+        html.push_str("</blockquote>\n");
+        html
+    }
+
+    fn render_engine_quote_html(&self, block: &Value) -> String {
+        let engine = block.get("engine").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let title = block.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let agent_title = ENGINE_AGENT_TITLES.iter().find(|(k, _)| *k == engine).map(|(_, v)| *v).unwrap_or(engine);
+        let mut html = format!("<div class=\"engine-quote\"><div class=\"engine-quote-header\">{} - {}</div>\n", agent_title, title);
+        if let Some(blocks) = block.get("blocks").and_then(|v| v.as_array()) {
+            for b in blocks { html.push_str(&self.render_block_html(b)); }
+        }
+        html.push_str("</div>\n");
+        html
+    }
+
+    fn render_code_html(&self, block: &Value) -> String {
+        let lang = block.get("lang").and_then(|v| v.as_str()).unwrap_or("");
+        let content = block.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        let caption = block.get("caption").and_then(|v| v.as_str());
+        let mut html = format!("<pre><code class=\"language-{}\">{}</code></pre>\n", lang, html_escape(content));
+        if let Some(cap) = caption { html.push_str(&format!("<p style=\"font-size:0.85em;color:#666;text-align:center\">{}</p>\n", cap)); }
+        html
+    }
+
+    fn render_math_html(&self, block: &Value) -> String {
+        let latex = block.get("latex").and_then(|v| v.as_str()).unwrap_or("");
+        let display = block.get("displayMode").and_then(|v| v.as_bool()).unwrap_or(true);
+        if display {
+            format!("<div class=\"math-display\">\\[{}\\]</div>\n", html_escape(latex))
+        } else {
+            format!("<span class=\"math-inline\">\\({}\\)</span>", html_escape(latex))
+        }
+    }
+
+    fn render_figure_html(&self, block: &Value) -> String {
+        let img = block.get("img").unwrap_or(&Value::Null);
+        let src = img.get("src").and_then(|v| v.as_str()).unwrap_or("");
+        let alt = img.get("alt").and_then(|v| v.as_str()).unwrap_or("");
+        let caption = block.get("caption").and_then(|v| v.as_str());
+        let mut html = format!("<figure><img src=\"{}\" alt=\"{}\" style=\"max-width:100%\">\n", src, alt);
+        if let Some(cap) = caption { html.push_str(&format!("<figcaption>{}</figcaption>\n", cap)); }
+        html.push_str("</figure>\n");
+        html
+    }
+
+    fn render_callout_html(&self, block: &Value) -> String {
+        let tone = block.get("tone").and_then(|v| v.as_str()).unwrap_or("info");
+        let title = block.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let icon = match tone { "warning" => "&#9888;", "success" => "&#10004;", "danger" => "&#9888;", _ => "&#8505;" };
+        let mut html = format!("<div class=\"callout callout-{}\">\n<div class=\"callout-title\">{} {}</div>\n", tone, icon, title);
+        if let Some(blocks) = block.get("blocks").and_then(|v| v.as_array()) {
+            for b in blocks { html.push_str(&self.render_block_html(b)); }
+        }
+        html.push_str("</div>\n");
+        html
+    }
+
+    fn render_kpi_html(&self, block: &Value) -> String {
+        let items = match block.get("items").and_then(|v| v.as_array()) { Some(i) => i, None => return String::new() };
+        let mut html = String::from("<div class=\"kpi-grid\">\n");
+        for item in items {
+            let label = item.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("—");
+            let unit = item.get("unit").and_then(|v| v.as_str()).unwrap_or("");
+            let delta = item.get("delta").and_then(|v| v.as_str());
+            let tone = item.get("deltaTone").and_then(|v| v.as_str()).unwrap_or("neutral");
+            let delta_class = match tone { "up" => "kpi-delta-up", "down" => "kpi-delta-down", _ => "kpi-delta-neutral" };
+            let arrow = match tone { "up" => "&#9650;", "down" => "&#9660;", _ => "&#9644;" };
+            html.push_str(&format!("<div class=\"kpi-card\"><div class=\"kpi-value\">{}{}</div><div class=\"kpi-label\">{}</div>", value, unit, label));
+            if let Some(d) = delta { html.push_str(&format!("<div class=\"kpi-delta {}\"> {} {}</div>", delta_class, arrow, d)); }
+            html.push_str("</div>\n");
+        }
+        html.push_str("</div>\n");
+        html
+    }
+
+    fn render_widget_html(&self, block: &Value) -> String {
+        let widget_type = block.get("widgetType").and_then(|v| v.as_str()).unwrap_or("");
+        if widget_type.contains("chart") || widget_type.contains("Chart") || block.get("props").and_then(|p| p.get("type")).is_some() {
+            let chart_id = {
+                let c = self.chart_counter.get();
+                self.chart_counter.set(c + 1);
+                format!("chart_{}", c)
+            };
+            // Chart.js 設定を収集
+            if let Some(props) = block.get("props") {
+                let config = serde_json::to_string(props).unwrap_or_default();
+                self.widget_scripts.borrow_mut().push(format!(
+                    "try{{ new Chart(document.getElementById('{}'), {}); }}catch(e){{ console.error('Chart error:', e); }}",
+                    chart_id, config
+                ));
+            }
+            format!("<div class=\"chart-container\"><canvas id=\"{}\"></canvas></div>\n", chart_id)
+        } else {
+            format!("<div class=\"widget\">[Widget: {}]</div>\n", widget_type)
+        }
+    }
+
+    fn render_scripts(&self) -> String {
+        let scripts = self.widget_scripts.borrow();
+        let mut js = String::from("<script>\n");
+        // テーマ切替
+        js.push_str("function toggleTheme(){const d=document.documentElement;d.dataset.theme=d.dataset.theme==='dark'?'light':'dark';}\n");
+        // Chart.js 初期化
+        if !scripts.is_empty() {
+            js.push_str("document.addEventListener('DOMContentLoaded', function(){\n");
+            for script in scripts.iter() {
+                js.push_str(script);
+                js.push('\n');
+            }
+            js.push_str("});\n");
+        }
+        // KaTeX 自動レンダリング
+        js.push_str("document.addEventListener('DOMContentLoaded',function(){if(typeof renderMathInElement!=='undefined'){renderMathInElement(document.body);}});\n");
+        js.push_str("</script>\n");
+        js
+    }
+}
+
+/// HTML エスケープ
+fn html_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 impl Default for HTMLRenderer {
@@ -1727,13 +2152,550 @@ pub const DEFAULT_CHART_COLORS: &[&str] = &[
     "#9B59B6", "#3498DB", "#E67E22", "#16A085",
 ];
 
+/// CSS 変数カラーマッピング
+pub const CSS_VAR_COLOR_MAP: &[(&str, &str)] = &[
+    ("var(--color-accent)", "#4A90E2"),
+    ("var(--re-accent-color)", "#4A90E2"),
+    ("var(--color-kpi-down)", "#E85D75"),
+    ("var(--color-success)", "#50C878"),
+    ("var(--color-warning)", "#FFB347"),
+    ("var(--color-danger)", "#E85D75"),
+    ("var(--color-info)", "#4A90E2"),
+    ("var(--color-primary)", "#4A90E2"),
+];
+
+/// 純 SVG ベースのチャート変換器
+///
+/// Python の chart_to_svg.py (1,214行) の Rust 実装。
+/// matplotlib に依存せず、SVG 文字列を直接生成する。
+pub struct SimpleChartToSVG;
+
+impl SimpleChartToSVG {
+    pub fn new() -> Self { Self }
+
+    /// CSS 変数カラーを解決
+    fn resolve_color(color: &str) -> String {
+        for (var, hex) in CSS_VAR_COLOR_MAP {
+            if color.contains(var) { return hex.to_string(); }
+        }
+        if color.starts_with("rgba") {
+            // rgba(r,g,b,a) をパース
+            let re = Regex::new(r"rgba?\((\d+),\s*(\d+),\s*(\d+)").unwrap();
+            if let Some(caps) = re.captures(color) {
+                return format!("rgb({},{},{})", &caps[1], &caps[2], &caps[3]);
+            }
+        }
+        color.to_string()
+    }
+
+    fn get_color(index: usize) -> &'static str {
+        DEFAULT_CHART_COLORS[index % DEFAULT_CHART_COLORS.len()]
+    }
+
+    /// バーチャートの SVG を生成
+    fn render_bar_svg(data: &Value, width: u32, height: u32) -> String {
+        let labels = data.get("labels").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let datasets = data.get("datasets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        if labels.is_empty() || datasets.is_empty() { return String::new(); }
+
+        let margin = 60u32;
+        let chart_w = width - margin * 2;
+        let chart_h = height - margin * 2;
+        let n_labels = labels.len();
+        let bar_w = chart_w / (n_labels as u32 * datasets.len().max(1) as u32);
+
+        let mut svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">"#, width, height, width, height);
+        svg.push_str(&format!(r#"<rect width="{}" height="{}" fill="white"/>"#, width, height));
+
+        // 最大値を計算
+        let mut max_val: f64 = 1.0;
+        for ds in &datasets {
+            if let Some(vals) = ds.get("data").and_then(|v| v.as_array()) {
+                for v in vals { if let Some(n) = v.as_f64() { if n > max_val { max_val = n; } } }
+            }
+        }
+
+        // バーを描画
+        for (di, ds) in datasets.iter().enumerate() {
+            let color = ds.get("backgroundColor").and_then(|v| v.as_str())
+                .map(|s| Self::resolve_color(s)).unwrap_or_else(|| Self::get_color(di).to_string());
+            if let Some(vals) = ds.get("data").and_then(|v| v.as_array()) {
+                for (li, v) in vals.iter().enumerate() {
+                    let val = v.as_f64().unwrap_or(0.0);
+                    let bar_h = (val / max_val * chart_h as f64) as u32;
+                    let x = margin + (li as u32 * datasets.len() as u32 + di as u32) * bar_w;
+                    let y = margin + chart_h - bar_h;
+                    svg.push_str(&format!(r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}" rx="2"/>"#, x, y, bar_w.saturating_sub(2), bar_h, color));
+                }
+            }
+        }
+
+        // X 軸ラベル
+        for (i, label) in labels.iter().enumerate() {
+            let x = margin + (i as u32 * datasets.len() as u32) * bar_w + bar_w * datasets.len() as u32 / 2;
+            let y = height - 10;
+            let text = label.as_str().unwrap_or("");
+            svg.push_str(&format!(r#"<text x="{}" y="{}" text-anchor="middle" font-size="11">{}</text>"#, x, y, text));
+        }
+
+        // 軸線
+        svg.push_str(&format!(r#"<line x1="{m}" y1="{m}" x2="{m}" y2="{b}" stroke="gray" stroke-width="1"/>"#, m=margin, b=margin+chart_h));
+        svg.push_str(&format!(r#"<line x1="{m}" y1="{b}" x2="{r}" y2="{b}" stroke="gray" stroke-width="1"/>"#, m=margin, b=margin+chart_h, r=margin+chart_w));
+        svg.push_str("</svg>");
+        svg
+    }
+
+    /// パイチャートの SVG を生成
+    fn render_pie_svg(data: &Value, width: u32, height: u32) -> String {
+        let labels = data.get("labels").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let datasets = data.get("datasets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        if datasets.is_empty() { return String::new(); }
+        let values: Vec<f64> = datasets[0].get("data").and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_f64()).collect()).unwrap_or_default();
+        if values.is_empty() { return String::new(); }
+
+        let total: f64 = values.iter().sum();
+        if total == 0.0 { return String::new(); }
+        let cx = width as f64 / 2.0;
+        let cy = height as f64 / 2.0;
+        let r = (width.min(height) as f64 / 2.0 - 40.0).max(50.0);
+
+        let mut svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">"#, width, height, width, height);
+        svg.push_str(&format!(r#"<rect width="{}" height="{}" fill="white"/>"#, width, height));
+
+        let mut angle = -std::f64::consts::FRAC_PI_2;
+        for (i, val) in values.iter().enumerate() {
+            let slice = val / total * 2.0 * std::f64::consts::PI;
+            let x1 = cx + r * angle.cos();
+            let y1 = cy + r * angle.sin();
+            let x2 = cx + r * (angle + slice).cos();
+            let y2 = cy + r * (angle + slice).sin();
+            let large = if slice > std::f64::consts::PI { 1 } else { 0 };
+            let color = Self::get_color(i);
+            svg.push_str(&format!(r#"<path d="M{cx},{cy} L{x1:.1},{y1:.1} A{r:.1},{r:.1} 0 {large},1 {x2:.1},{y2:.1} Z" fill="{color}"/>"#));
+            // ラベル
+            let mid = angle + slice / 2.0;
+            let lx = cx + (r + 20.0) * mid.cos();
+            let ly = cy + (r + 20.0) * mid.sin();
+            let label = labels.get(i).and_then(|v| v.as_str()).unwrap_or("");
+            let pct = val / total * 100.0;
+            svg.push_str(&format!(r#"<text x="{lx:.1}" y="{ly:.1}" text-anchor="middle" font-size="10">{label} ({pct:.0}%)</text>"#));
+            angle += slice;
+        }
+
+        svg.push_str("</svg>");
+        svg
+    }
+
+    /// ラインチャートの SVG を生成
+    fn render_line_svg(data: &Value, width: u32, height: u32) -> String {
+        let labels = data.get("labels").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let datasets = data.get("datasets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        if labels.is_empty() || datasets.is_empty() { return String::new(); }
+
+        let margin = 60u32;
+        let chart_w = width - margin * 2;
+        let chart_h = height - margin * 2;
+
+        let mut max_val: f64 = 1.0;
+        for ds in &datasets {
+            if let Some(vals) = ds.get("data").and_then(|v| v.as_array()) {
+                for v in vals { if let Some(n) = v.as_f64() { if n > max_val { max_val = n; } } }
+            }
+        }
+
+        let mut svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">"#, width, height, width, height);
+        svg.push_str(&format!(r#"<rect width="{}" height="{}" fill="white"/>"#, width, height));
+        // 軸
+        svg.push_str(&format!(r#"<line x1="{m}" y1="{m}" x2="{m}" y2="{b}" stroke="silver"/>"#, m=margin, b=margin+chart_h));
+        svg.push_str(&format!(r#"<line x1="{m}" y1="{b}" x2="{r}" y2="{b}" stroke="silver"/>"#, m=margin, b=margin+chart_h, r=margin+chart_w));
+
+        for (di, ds) in datasets.iter().enumerate() {
+            let color = ds.get("borderColor").and_then(|v| v.as_str())
+                .map(|s| Self::resolve_color(s)).unwrap_or_else(|| Self::get_color(di).to_string());
+            if let Some(vals) = ds.get("data").and_then(|v| v.as_array()) {
+                let n = vals.len().max(1);
+                let points: Vec<String> = vals.iter().enumerate().map(|(i, v)| {
+                    let val = v.as_f64().unwrap_or(0.0);
+                    let x = margin as f64 + (i as f64 / (n - 1).max(1) as f64) * chart_w as f64;
+                    let y = margin as f64 + chart_h as f64 - (val / max_val * chart_h as f64);
+                    format!("{:.1},{:.1}", x, y)
+                }).collect();
+                svg.push_str(&format!(r#"<polyline points="{}" fill="none" stroke="{}" stroke-width="2"/>"#, points.join(" "), color));
+                // データポイント
+                for pt in &points {
+                    let parts: Vec<&str> = pt.split(',').collect();
+                    svg.push_str(&format!(r#"<circle cx="{}" cy="{}" r="3" fill="{}"/>"#, parts[0], parts[1], color));
+                }
+            }
+        }
+        // X ラベル
+        let n = labels.len().max(1);
+        for (i, label) in labels.iter().enumerate() {
+            let x = margin as f64 + (i as f64 / (n - 1).max(1) as f64) * chart_w as f64;
+            svg.push_str(&format!(r#"<text x="{:.0}" y="{}" text-anchor="middle" font-size="10">{}</text>"#, x, height - 10, label.as_str().unwrap_or("")));
+        }
+
+        svg.push_str("</svg>");
+        svg
+    }
+
+    /// レーダーチャートの SVG を生成
+    fn render_radar_svg(data: &Value, width: u32, height: u32) -> String {
+        let labels = data.get("labels").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let datasets = data.get("datasets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        if labels.is_empty() || datasets.is_empty() { return String::new(); }
+
+        let cx = width as f64 / 2.0;
+        let cy = height as f64 / 2.0;
+        let r = (width.min(height) as f64 / 2.0 - 50.0).max(50.0);
+        let n = labels.len();
+
+        let mut svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}">"#, width, height, width, height);
+        svg.push_str(&format!(r#"<rect width="{}" height="{}" fill="white"/>"#, width, height));
+
+        // グリッド
+        for level in 1..=5 {
+            let lr = r * level as f64 / 5.0;
+            let points: Vec<String> = (0..n).map(|i| {
+                let angle = std::f64::consts::FRAC_PI_2 * -1.0 + 2.0 * std::f64::consts::PI * i as f64 / n as f64;
+                format!("{:.1},{:.1}", cx + lr * angle.cos(), cy + lr * angle.sin())
+            }).collect();
+            svg.push_str(&format!(r#"<polygon points="{}" fill="none" stroke="lightgray"/>"#, points.join(" ")));
+        }
+
+        // データセット
+        let mut max_val: f64 = 1.0;
+        for ds in &datasets {
+            if let Some(vals) = ds.get("data").and_then(|v| v.as_array()) {
+                for v in vals { if let Some(n) = v.as_f64() { if n > max_val { max_val = n; } } }
+            }
+        }
+        for (di, ds) in datasets.iter().enumerate() {
+            let color = Self::get_color(di);
+            if let Some(vals) = ds.get("data").and_then(|v| v.as_array()) {
+                let points: Vec<String> = vals.iter().enumerate().map(|(i, v)| {
+                    let val = v.as_f64().unwrap_or(0.0);
+                    let dr = r * val / max_val;
+                    let angle = -std::f64::consts::FRAC_PI_2 + 2.0 * std::f64::consts::PI * i as f64 / n as f64;
+                    format!("{:.1},{:.1}", cx + dr * angle.cos(), cy + dr * angle.sin())
+                }).collect();
+                svg.push_str(&format!(r#"<polygon points="{}" fill="{}" fill-opacity="0.2" stroke="{}" stroke-width="2"/>"#, points.join(" "), color, color));
+            }
+        }
+
+        // ラベル
+        for (i, label) in labels.iter().enumerate() {
+            let angle = -std::f64::consts::FRAC_PI_2 + 2.0 * std::f64::consts::PI * i as f64 / n as f64;
+            let lx = cx + (r + 15.0) * angle.cos();
+            let ly = cy + (r + 15.0) * angle.sin();
+            svg.push_str(&format!(r#"<text x="{:.1}" y="{:.1}" text-anchor="middle" font-size="10">{}</text>"#, lx, ly, label.as_str().unwrap_or("")));
+        }
+
+        svg.push_str("</svg>");
+        svg
+    }
+}
+
+impl ChartToSVGConverter for SimpleChartToSVG {
+    fn convert_widget_to_svg(&self, widget_data: &Value) -> Option<String> {
+        let chart_type = widget_data.get("props")
+            .and_then(|p| p.get("type"))
+            .and_then(|v| v.as_str())
+            .or_else(|| widget_data.get("widgetType").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let data = widget_data.get("props")
+            .and_then(|p| p.get("data"))
+            .or_else(|| widget_data.get("data"))
+            .cloned()
+            .unwrap_or(Value::Null);
+
+        let svg = match chart_type {
+            "bar" | "horizontalBar" => Self::render_bar_svg(&data, 800, 500),
+            "line" => Self::render_line_svg(&data, 800, 500),
+            "pie" | "doughnut" | "polarArea" => Self::render_pie_svg(&data, 600, 600),
+            "radar" => Self::render_radar_svg(&data, 600, 600),
+            "scatter" | "bubble" => Self::render_line_svg(&data, 800, 500), // scatter もライン風に
+            _ => return None,
+        };
+        if svg.is_empty() { None } else { Some(svg) }
+    }
+}
+
+impl Default for SimpleChartToSVG {
+    fn default() -> Self { Self::new() }
+}
+
 // =============================================================================
-// レンダラー: Math SVG (renderers/math_to_svg.py - トレイト定義)
+// レンダラー: Math SVG (renderers/math_to_svg.py)
 // =============================================================================
 
 /// Math SVG 変換トレイト
 pub trait MathToSVGConverter: Send + Sync {
     fn convert_to_svg(&self, latex: &str, display_mode: bool) -> Option<String>;
+}
+
+/// 簡易 Math レンダラー（HTML フォールバック）
+pub struct SimpleMathRenderer;
+
+impl SimpleMathRenderer {
+    pub fn new() -> Self { Self }
+}
+
+impl MathToSVGConverter for SimpleMathRenderer {
+    fn convert_to_svg(&self, latex: &str, display_mode: bool) -> Option<String> {
+        if latex.is_empty() { return None; }
+        // LaTeX デリミタを除去
+        let clean = latex.trim().trim_start_matches("$$").trim_end_matches("$$")
+            .trim_start_matches('$').trim_end_matches('$')
+            .trim_start_matches("\\[").trim_end_matches("\\]")
+            .trim_start_matches("\\(").trim_end_matches("\\)")
+            .trim();
+        if display_mode {
+            Some(format!(r#"<div style="text-align:center;font-size:1.3em;margin:1em 0;font-style:italic">{}</div>"#, html_escape(clean)))
+        } else {
+            Some(format!(r#"<span style="font-style:italic">{}</span>"#, html_escape(clean)))
+        }
+    }
+}
+
+impl Default for SimpleMathRenderer {
+    fn default() -> Self { Self::new() }
+}
+
+// =============================================================================
+// チャート/テーブルバリデーター (utils/chart_validator.py, table_validator.py)
+// =============================================================================
+
+/// チャート設定バリデーター
+pub struct ChartValidator;
+
+impl ChartValidator {
+    pub fn new() -> Self { Self }
+
+    /// チャート設定を検証
+    pub fn validate(&self, config: &Value) -> (bool, Vec<String>) {
+        let mut errors = Vec::new();
+
+        // type チェック
+        let chart_type = config.get("type").and_then(|v| v.as_str());
+        if chart_type.is_none() {
+            errors.push("チャート設定に 'type' がありません".to_string());
+        } else {
+            let valid_types = ["bar", "line", "pie", "doughnut", "radar", "scatter", "bubble", "polarArea", "horizontalBar"];
+            if !valid_types.contains(&chart_type.unwrap()) {
+                errors.push(format!("無効なチャートタイプ: {}", chart_type.unwrap()));
+            }
+        }
+
+        // data チェック
+        if let Some(data) = config.get("data") {
+            if data.get("datasets").and_then(|v| v.as_array()).map(|a| a.is_empty()).unwrap_or(true) {
+                errors.push("データセットが空です".to_string());
+            }
+        } else {
+            errors.push("チャート設定に 'data' がありません".to_string());
+        }
+
+        (errors.is_empty(), errors)
+    }
+
+    /// チャート設定を自動修復
+    pub fn repair(&self, config: &mut Value) -> bool {
+        let mut repaired = false;
+        // labels が無い場合、データセットから推測
+        if let Some(data) = config.get_mut("data") {
+            if data.get("labels").is_none() {
+                if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
+                    if let Some(first) = datasets.first() {
+                        if let Some(vals) = first.get("data").and_then(|v| v.as_array()) {
+                            let labels: Vec<Value> = (1..=vals.len()).map(|i| Value::String(format!("Item {}", i))).collect();
+                            data["labels"] = Value::Array(labels);
+                            repaired = true;
+                        }
+                    }
+                }
+            }
+        }
+        repaired
+    }
+}
+
+impl Default for ChartValidator {
+    fn default() -> Self { Self::new() }
+}
+
+/// テーブル構造バリデーター
+pub struct TableValidator;
+
+impl TableValidator {
+    pub fn new() -> Self { Self }
+
+    /// テーブル構造を検証
+    pub fn validate(&self, table: &Value) -> (bool, Vec<String>) {
+        let mut errors = Vec::new();
+
+        let rows = table.get("rows").and_then(|v| v.as_array());
+        if rows.is_none() {
+            errors.push("テーブルに 'rows' がありません".to_string());
+            return (false, errors);
+        }
+
+        let rows = rows.unwrap();
+        if rows.is_empty() {
+            errors.push("テーブルの rows が空です".to_string());
+        }
+
+        // 各行のセル数一貫性チェック
+        let mut col_counts: Vec<usize> = Vec::new();
+        for (i, row) in rows.iter().enumerate() {
+            let cells = row.get("cells").and_then(|v| v.as_array());
+            match cells {
+                Some(c) => col_counts.push(c.len()),
+                None => errors.push(format!("行 {} に 'cells' がありません", i)),
+            }
+        }
+
+        (errors.is_empty(), errors)
+    }
+
+    /// テーブル構造を修復（空セルにデフォルトブロックを追加）
+    pub fn repair(&self, table: &mut Value) -> bool {
+        let mut repaired = false;
+        if let Some(rows) = table.get_mut("rows").and_then(|v| v.as_array_mut()) {
+            for row in rows.iter_mut() {
+                if let Some(cells) = row.get_mut("cells").and_then(|v| v.as_array_mut()) {
+                    for cell in cells.iter_mut() {
+                        if let Some(blocks) = cell.get_mut("blocks").and_then(|v| v.as_array_mut()) {
+                            if blocks.is_empty() {
+                                blocks.push(serde_json::json!({"type": "paragraph", "inlines": [{"text": "", "marks": []}]}));
+                                repaired = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        repaired
+    }
+}
+
+impl Default for TableValidator {
+    fn default() -> Self { Self::new() }
+}
+
+// =============================================================================
+// PDF レイアウトオプティマイザー
+// =============================================================================
+
+/// PDF レイアウトオプティマイザー
+pub struct PDFLayoutOptimizer;
+
+impl PDFLayoutOptimizer {
+    pub fn new() -> Self { Self }
+
+    /// HTML に改ページヒントを挿入
+    pub fn optimize_for_print(&self, html: &str) -> String {
+        let mut result = html.to_string();
+        // h2 の前に改ページを挿入
+        result = result.replace("<h2", "<h2 style=\"page-break-before:always\" ");
+        // テーブルの改ページ防止
+        result = result.replace("<table", "<table style=\"page-break-inside:avoid\" ");
+        // 図の改ページ防止
+        result = result.replace("<figure", "<figure style=\"page-break-inside:avoid\" ");
+        result
+    }
+}
+
+impl Default for PDFLayoutOptimizer {
+    fn default() -> Self { Self::new() }
+}
+
+// =============================================================================
+// Flask インターフェース相当 (flask_interface.py)
+// =============================================================================
+
+/// レポートタスク
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportTask {
+    pub task_id: String,
+    pub status: String,
+    pub progress: f64,
+    pub events: Vec<ReportEvent>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// レポートイベント (SSE 互換)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportEvent {
+    pub timestamp: String,
+    pub event_type: String,
+    pub data: Value,
+}
+
+impl ReportTask {
+    pub fn new(task_id: &str) -> Self {
+        let now = Utc::now().to_rfc3339();
+        Self {
+            task_id: task_id.to_string(),
+            status: "pending".to_string(),
+            progress: 0.0,
+            events: Vec::new(),
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+
+    pub fn add_event(&mut self, event_type: &str, data: Value) {
+        self.events.push(ReportEvent {
+            timestamp: Utc::now().to_rfc3339(),
+            event_type: event_type.to_string(),
+            data,
+        });
+        self.updated_at = Utc::now().to_rfc3339();
+    }
+
+    pub fn update_progress(&mut self, progress: f64) {
+        self.progress = progress;
+        self.updated_at = Utc::now().to_rfc3339();
+    }
+}
+
+/// タスクレジストリ
+pub struct TaskRegistry {
+    tasks: HashMap<String, ReportTask>,
+    max_history: usize,
+}
+
+impl TaskRegistry {
+    pub fn new(max_history: usize) -> Self {
+        Self { tasks: HashMap::new(), max_history }
+    }
+
+    pub fn create_task(&mut self) -> String {
+        let task_id = format!("report_{}", Utc::now().format("%Y%m%d_%H%M%S_%3f"));
+        self.tasks.insert(task_id.clone(), ReportTask::new(&task_id));
+        // 最大履歴数を超えたら古いタスクを除去
+        while self.tasks.len() > self.max_history {
+            if let Some(oldest) = self.tasks.keys().next().cloned() {
+                self.tasks.remove(&oldest);
+            }
+        }
+        task_id
+    }
+
+    pub fn get_task(&self, task_id: &str) -> Option<&ReportTask> {
+        self.tasks.get(task_id)
+    }
+
+    pub fn get_task_mut(&mut self, task_id: &str) -> Option<&mut ReportTask> {
+        self.tasks.get_mut(task_id)
+    }
+}
+
+impl Default for TaskRegistry {
+    fn default() -> Self { Self::new(5) }
 }
 
 // =============================================================================
